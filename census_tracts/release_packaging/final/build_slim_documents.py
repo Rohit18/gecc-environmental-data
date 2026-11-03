@@ -136,6 +136,8 @@ def fix(s):
     s = s.replace(OVERVIEW, OVERVIEW_NEW)
     if s.endswith('under award U24AG088894.'):
         s += ACK_ADD
+    if s.endswith(('Also cite the source products in section 10.', 'Also cite the source products in codebook section 10.')):
+        s += ' Processing code is available at https://github.com/Rohit18/gecc-environmental-data (census_tracts/).'
     for old, new in REFERENCES:
         s = s.replace(old, new)
     return s
