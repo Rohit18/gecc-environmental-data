@@ -1,0 +1,15 @@
+name: urbveg
+channels: [conda-forge]
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - pyarrow
+  - geopandas
+  - shapely>=2
+  - pyproj
+  - rasterio
+  - gdal
+  - pyyaml
+  - tqdm
+  - awscli

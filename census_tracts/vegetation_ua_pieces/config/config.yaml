@@ -1,0 +1,190 @@
+# urbveg — urban–rural vegetation difference ("Method A")
+# Phase 1 config: paths, layer registry, raster codes. Values marked TODO/null are open decisions.
+# Generated in Phase 1 (2026-10-05). See REPORT.md for what is VERIFIED vs ASSUMED.
+
+project:
+  name: urbveg
+  scratch: /path/to/scratch/urbveg
+  cfs: /path/to/project/urbveg          # writable (checked); nothing copied yet
+  env_prefix: /path/to/scratch/urbveg/env   # DECISION: env stays on scratch. Rebuild if purged:
+  #   mamba create -p <prefix> -f config/environment.lock.yml   (or environment.yml; see config/ENV_REBUILD.md)
+  # Broken env at /global/common/software/your_nersc_project/your_user/envs/urbveg is left in place (do not delete).
+
+paths:
+  raw: /path/to/scratch/urbveg/data/raw
+  interim: /path/to/scratch/urbveg/data/interim
+  manifests: /path/to/scratch/urbveg/manifests
+  logs: /path/to/scratch/urbveg/logs
+  worldcover_dir: /path/to/scratch/urbveg/data/raw/worldcover_2020/tiles
+  glc_dir: /path/to/scratch/urbveg/data/raw/glc_fcs30d/tiles
+
+# ---------------------------------------------------------------------------
+# Layer registry. Tile selection uses the union of all domain layers with enabled: true.
+# Add new domains/zones here; no code change needed.
+# ---------------------------------------------------------------------------
+layers:
+  domains:
+    urban_areas_2020:
+      enabled: true
+      # DECISION (Phase 2, Stage 0): corrected national file (includes June 2023 Atlanta/Gainesville/New Orleans revisions)
+      path: /path/to/scratch/urbveg/data/raw/boundaries/urban_areas_2020/tl_2020_us_uac20_corrected/tl_2020_us_uac20_corrected.shp
+      id_field: GEOID20
+      name_field: NAME20
+      # DECISION: drop UAs whose NAME20 state suffix is HI, GU, MP, AS (no GLC coverage) or VI (no tracts)
+      drop_state_suffixes: [HI, GU, MP, AS, VI]
+      expected_n_kept: 2622
+      kept_path: /path/to/scratch/urbveg/data/interim/uas_kept.parquet   # written by scripts/prepare_domains.py
+      tile_selection_buffer_deg: 0.01
+    fua:
+      enabled: false        # not part of the census run's tile selection; used by run profile fua_fishnet
+      path: /path/to/home/GECC/FUA_polygons/FUA_polygons.shp   # same 9,031 eFUA_IDs as all GECC FUA products (checked)
+      id_field: eFUA_ID     # stored as float; cast to int64 (as GECC code did)
+      name_field: eFUA_nm
+      encoding: latin1      # .cpg says UTF-8 (wrong); latin1 reproduces released GECC names 9031/9031
+      # Rule: drop the 4 FUAs with no GLC_FCS30D tile (Honolulu, Suva, Noumea, Honiara)
+      drop_no_glc: true
+      expected_n_kept: 9027
+      kept_path: /path/to/scratch/urbveg/data/interim/fua/fua_kept.parquet   # scripts/prepare_fua_domain.py
+      tile_selection_buffer_deg: 0.01
+  zones:
+    fua_fishnet_1km:
+      # EC_FUA_fishnet_1km_properties_gridID (Drive file = EE asset projects/your-ee-project/assets/GECC/...); checked 2026-10-06
+      source: /path/to/scratch/urbveg/data/raw/boundaries/fua_fishnet/EC_FUA_fishnet_1km_properties_gridID.geojson
+      path: /path/to/scratch/urbveg/data/interim/fua_fishnet.parquet
+      id_field: grid_id
+      domain_key: eFUA_ID   # each cell is intersected with its own FUA only
+    tracts_2020:
+      enabled: true
+      path_glob: /path/to/scratch/urbveg/data/raw/boundaries/tracts_2020/tl_2020_*_tract/tl_2020_*_tract.shp
+      id_field: GEOID
+      state_field: STATEFP
+    zcta:
+      enabled: false        # placeholder
+      path: null
+      id_field: null
+    grid:
+      enabled: false        # placeholder
+      path: null
+      id_field: null
+      cell_size_deg: null
+
+# ---------------------------------------------------------------------------
+# ESA WorldCover 2020 v100 — VERIFIED on N39W084 and N36W078 (manifests/worldcover_verify.json)
+# and in the Product User Manual v1.0 Table 2 p.13 (data/raw/worldcover_2020/docs/)
+# ---------------------------------------------------------------------------
+worldcover:
+  version: v100
+  year: 2020
+  s3_prefix: s3://esa-worldcover/v100/2020/map/
+  file_pattern: ESA_WorldCover_10m_2020_v100_{tile}_Map.tif   # tile = lower-left corner, e.g. N39W084
+  tile_grid: /path/to/scratch/urbveg/data/raw/worldcover_2020/aux/esa_worldcover_grid.geojson
+  tile_manifest: /path/to/scratch/urbveg/manifests/worldcover_tiles.csv
+  codes:
+    built_up: 50      # "Built-up" (PUM Table 2)
+    water: 80         # "Permanent water bodies" (PUM Table 2)
+    nodata: 0         # GeoTIFF nodata tag
+  all_classes: {10: Tree cover, 20: Shrubland, 30: Grassland, 40: Cropland, 50: Built-up,
+                60: Bare / sparse vegetation, 70: Snow and ice, 80: Permanent water bodies,
+                90: Herbaceous wetland, 95: Mangroves, 100: Moss and lichen}
+  crs: EPSG:4326
+  pixel_size_deg: 8.333333333333333e-05   # 1/12000
+  tile_size_deg: 3
+  tile_size_px: 36000
+  dtype: uint8
+
+# ---------------------------------------------------------------------------
+# GLC_FCS30D — header facts VERIFIED remotely for 4 tiles per version (manifests/glc_header_check_*.json)
+# Band->year mapping is from the User Guide (no band descriptions in the files): DOCUMENTED, not verifiable from metadata
+# ---------------------------------------------------------------------------
+glc_fcs30d:
+  zenodo_record: "8239305"  # DECISION: v1 (2023-08-11), annual files only. v2 (15063683) not used.
+  years: [2020]             # years to process (list; may grow)
+  records:
+    "8239305":
+      file_pattern_annual: GLC_FCS30D_20002022_{tile}_Annual.tif
+      file_pattern_5yr: GLC_FCS30_19852000_5yearsMap_V1_{tile}.tif
+      tile_manifest: /path/to/scratch/urbveg/manifests/glc_tiles_8239305.csv
+    "15063683":
+      file_pattern_annual: GLC_FCS30D_20002022_{tile}_Annual_V1.1.tif
+      file_pattern_5yr: GLC_FCS30D_19852000_{tile}_5years_V1.1.tif
+      tile_manifest: /path/to/scratch/urbveg/manifests/glc_tiles_15063683.csv
+  tile_naming: upper-left corner, e.g. W85N40 -> lon [-85, -79.9998], lat [34.9998, 40]
+  tile_size_px: 18554
+  tile_extent_deg: 5.000202534466
+  neighbour_overlap_deg: 0.000202534466   # adjacent tiles overlap by ~0.75 GLC px; their grids are offset by 0.248 GLC px
+  crs: EPSG:4326
+  pixel_size_deg: 0.00026949458523585663   # = 30 m at the equator; v1 differs in the 17th digit
+  dtype: uint8
+  nodata_tag: null                         # no nodata tag in the files
+  fill_values: [0, 250]                    # User Guide; kept as own classes in partials, excluded only in finalize
+  annual_band_count: 23
+  band_year_annual: {2000: 1, 2001: 2, 2002: 3, 2003: 4, 2004: 5, 2005: 6, 2006: 7, 2007: 8, 2008: 9,
+                     2009: 10, 2010: 11, 2011: 12, 2012: 13, 2013: 14, 2014: 15, 2015: 16, 2016: 17,
+                     2017: 18, 2018: 19, 2019: 20, 2020: 21, 2021: 22, 2022: 23}   # 1-based rasterio band index
+  band_year_5yr: {1985: 1, 1990: 2, 1995: 3}
+  class_table: /path/to/scratch/urbveg/config/glc_classes.csv
+  # Rule: vegetated = cropland, forest, shrubland, grassland, lichens/mosses (whole groups of
+  # the basic system in Zhang et al. 2024 ESSD Table 1) + vegetated wetland subclasses 181, 182, 185, 186.
+  # Non-vegetated: sparse vegetation 150/152/153, wetlands 183/184/187, 190, 200-202, 210, 220. Fill 0/250 excluded.
+  # No sensitivity analyses.
+  # NOTE: ESSD Table 1 and the Zenodo User Guide disagree on open/closed for forest pairs 51/52, 61/62, 71/72, 81/82,
+  # 91/92 (glc_classes.csv follows the User Guide). Irrelevant here: all forest codes are vegetated.
+  vegetation_classes: [10, 11, 12, 20, 51, 52, 61, 62, 71, 72, 81, 82, 91, 92, 120, 121, 122, 130, 140, 181, 182, 185, 186]
+  no_coverage_note: no tiles for Hawaii, Guam, CNMI, American Samoa in either Zenodo version
+
+# ---------------------------------------------------------------------------
+# Pipeline settings (Phase 2)
+# ---------------------------------------------------------------------------
+pipeline:
+  pieces_path: /path/to/scratch/urbveg/data/interim/pieces.parquet
+  partials_dir: /path/to/scratch/urbveg/data/interim/partials
+  output_dir: /path/to/scratch/urbveg/data/output/census_tracts_ua
+  equal_area_crs: EPSG:6933
+  authalic_radius_m: 6371007.181      # WGS84/GRS80 authalic sphere radius
+  # Rule: keep spherical pixel areas (geodetic latitude) for consistency with GECC
+  # census-tract/FUA UHI WorldCover fractions (same R, cos-lat weights); polygon areas in EPSG:6933 as in GECC.
+  window_px: 3000                      # from Stage 4 benchmark (N39W084: 3000 px fastest, 28.7 s, 4.8 GB)
+  rasterize_all_touched: false
+  glc_overhang: clamp                  # Rule: last row/col of each GLC tile treated as invalid overhang; use adjacent row/col (nearest valid pixel)
+finalize:
+  sliver_flag:                         # flag only, nothing dropped. Rule: overlap_share < 0.01 only
+    overlap_share_lt: 0.01
+    piece_area_m2_lt: null
+  area_check: report_only               # Rule: valid > polygon area (tol 0.5% + 200 m2) is reported, not enforced
+
+# ---------------------------------------------------------------------------
+# Run profiles (2026-10-06). Select with env URBVEG_RUN (default: default_run).
+# Each profile names a zone layer and a domain layer; outputs go to the profile's own paths.
+# ---------------------------------------------------------------------------
+default_run: census_tracts_ua
+runs:
+  census_tracts_ua:
+    zone: tracts_2020
+    domain: urban_areas_2020
+    pieces_path: /path/to/scratch/urbveg/data/interim/pieces.parquet
+    partials_dir: /path/to/scratch/urbveg/data/interim/partials
+    output_dir: /path/to/scratch/urbveg/data/output/census_tracts_ua
+    worldcover_tiles: /path/to/scratch/urbveg/manifests/worldcover_tiles.csv
+    glc_tiles: /path/to/scratch/urbveg/manifests/glc_tiles_8239305.csv
+    domain_index_col: ua_idx            # column name in this run's pieces / kept-domain files
+    domain_id_col: GEOID20
+    domain_name_col: NAME20
+    zone_id_col: GEOID
+    zone_area_col: tract_area_m2
+    extra_piece_cols: []
+  fua_fishnet:
+    zone: fua_fishnet_1km
+    domain: fua
+    pieces_path: /path/to/scratch/urbveg/data/interim/fua/pieces.parquet
+    partials_dir: /path/to/scratch/urbveg/data/interim/fua/partials
+    output_dir: /path/to/scratch/urbveg/data/output/fua_fishnet
+    worldcover_tiles: /path/to/scratch/urbveg/manifests/worldcover_tiles_fua.csv
+    glc_tiles: /path/to/scratch/urbveg/manifests/glc_tiles_8239305_fua.csv
+    domain_index_col: dom_idx
+    domain_id_col: eFUA_ID
+    domain_name_col: eFUA_nm
+    zone_id_col: grid_id
+    zone_area_col: cell_area_m2
+    # Rule: option B — each cell intersected with its own FUA; cell_uid identifies the
+    # physical cell shared by listings under neighbouring FUAs
+    extra_piece_cols: [cell_uid, n_listings]
